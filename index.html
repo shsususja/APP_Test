@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sheriff Robot View</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #101820;
+      color: #00ff88;
+      font-family: Consolas, monospace;
+      text-align: center;
+    }
+    h1 { color: #00ff88; }
+    #container {
+      position: relative;
+      display: inline-block;
+      width: min(95vw, 800px);
+      line-height: 0;
+    }
+    video, canvas {
+      width: 100%;
+      height: auto;
+      border: 2px solid #00ff88;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+    video { transform: scaleX(-1); }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: scaleX(-1);
+      pointer-events: none;
+    }
+    #info {
+      line-height: 1.7;
+      margin: 16px auto;
+      padding: 16px;
+      width: min(85vw, 500px);
+      background: #1d2935;
+      border-radius: 10px;
+      text-align: left;
+      box-sizing: border-box;
+    }
+    button {
+      padding: 12px 22px;
+      margin-bottom: 16px;
+      background: #00ff88;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .warning { color: #ff4444; }
+  </style>
+</head>
+<body>
+  <h1>SHERIFF ROBOT VIEW</h1>
+  <p id="status">시작 버튼을 눌러 카메라를 실행하세요.</p>
+  <button id="start">카메라 시작</button>
+
+  <div id="container">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div id="info">
+    X 좌표: <span id="x">--</span><br>
+    Y 좌표: <span id="y">--</span><br>
+    Z 깊이 비율: <span id="z">--</span><br>
+    좌우 방향: <span id="horizontal">--</span><br>
+    상하 방향: <span id="vertical">--</span><br>
+    거리 추정: <span id="depth">--</span>
+  </div>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("overlay");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+    let running = false;
+
+    document.getElementById("start").addEventListener("click", startCamera);
+
+    async function startCamera() {
+      if (running) return;
+      try {
+        status.textContent = "얼굴 인식 모델을 불러오는 중...";
+        await faceapi.nets.tinyFaceDetector.loadFromUri(
+          "https://justadudewhohacks.github.io/face-api.js/models"
+        );
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        running = true;
+        status.textContent = "얼굴 인식 작동 중";
+        detectFaces();
+      } catch (error) {
+        status.textContent =
+          "실행 오류: 카메라 권한, 인터넷 연결 및 HTTPS/localhost를 확인하세요.";
+        console.error(error);
+      }
+    }
+
+    async function detectFaces() {
+      if (!running) return;
+
+      try {
+        const result = await faceapi.detectAllFaces(
+          video,
+          new faceapi.TinyFaceDetectorOptions({
+            inputSize: 320,
+            scoreThreshold: 0.5
+          })
+        );
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const W = video.videoWidth;
+        const H = video.videoHeight;
+
+        ctx.strokeStyle = "#666";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(W / 2, 0);
+        ctx.lineTo(W / 2, H);
+        ctx.moveTo(0, H / 2);
+        ctx.lineTo(W, H / 2);
+        ctx.stroke();
+
+        if (result.length === 0) {
+          ["x", "y", "z", "horizontal", "vertical", "depth"].forEach(id => {
+            const el = document.getElementById(id);
+            el.textContent = "--";
+            el.className = "";
+          });
+          status.textContent = "얼굴을 찾을 수 없습니다.";
+        }
+
+        for (const face of result) {
+          const { x, y, width, height } = face.box;
+          const cx = x + width / 2;
+          const cy = y + height / 2;
+
+          // 화면 중심 기준: 오른쪽과 위쪽이 양수
+          const X = (cx - W / 2) / (W / 2);
+          const Y = (H / 2 - cy) / (H / 2);
+          const Z = width / W;
+
+          const horizontal =
+            X < -0.05 ? "LEFT" : X > 0.05 ? "RIGHT" : "CENTER";
+          const vertical =
+            Y > 0.05 ? "UP" : Y < -0.05 ? "DOWN" : "CENTER";
+
+          const tooClose = Z > 0.35;
+          const color = tooClose ? "#ff3333" : "#00ff88";
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, width, height);
+          ctx.beginPath();
+          ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.moveTo(W / 2, H / 2);
+          ctx.lineTo(cx, cy);
+          ctx.stroke();
+
+          document.getElementById("x").textContent = X.toFixed(2);
+          document.getElementById("y").textContent = Y.toFixed(2);
+          document.getElementById("z").textContent = Z.toFixed(2);
+          document.getElementById("horizontal").textContent = horizontal;
+          document.getElementById("vertical").textContent = vertical;
+
+          const depth = document.getElementById("depth");
+          depth.textContent = tooClose ? "너무 가까움" : "멀리 있음 / 정상";
+          depth.className = tooClose ? "warning" : "";
+          status.textContent = tooClose ? "WARNING! TOO CLOSE!" : "TARGET LOCKED";
+
+          ctx.fillStyle = color;
+          ctx.font = "18px Consolas";
+          ctx.fillText(`${horizontal} / ${vertical}`, x, Math.max(22, y - 8));
+        }
+      } catch (error) {
+        console.error(error);
+        status.textContent = "얼굴 인식 중 오류가 발생했습니다.";
+      }
+
+      if (running) requestAnimationFrame(detectFaces);
+    }
+  </script>
+</body>
+</html>
